@@ -105,6 +105,7 @@ def run_obstacle_detection(img):
 
     _candidates = []
     result = img.copy()
+    pred_bboxes = []
     for candidate in candidates:
         batch_size = candidate.shape[0]
         grid_size = candidate.shape[1]
@@ -237,14 +238,13 @@ image_arr = add_arrow_to_box(input_image, pred_bboxes, flow_up)
 plt.imshow(image_arr)
 plt.show()
 
-f, (ax0, ax1)= plt.subplots(1, 2, figsize=(20,10))
+_, (ax0, ax1)= plt.subplots(1, 2, figsize=(20,10))
 ax0.imshow(image_arr)
 ax1.imshow(flo)
 plt.show()
 
 print(flo.shape)
 print(image_arr.shape)
-"""
 
 #####################################
 # RAFT + YOLOv4 Inference for video #
@@ -260,4 +260,3 @@ out = cv2.VideoWriter("outputs/output_arrow2.mp4",cv2.VideoWriter_fourcc(*'mp4v'
 for i in range(len(video_frames_arrow)):
     out.write(video_frames_arrow[i].astype(np.uint8))
 out.release()
-"""
