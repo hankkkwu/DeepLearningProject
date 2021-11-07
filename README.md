@@ -9,6 +9,7 @@ Here is the result of the RAFT on video1:
 ![optical flow1](https://github.com/hankkkwu/RAFTwithYOLOv4/blob/main/outputs/output_flow1.gif)
 
 Here is the result with bounding box and objects motion on video1:
+(Green arrows are the motion of the objects)
 
 ![result1](https://github.com/hankkkwu/RAFTwithYOLOv4/blob/main/outputs/output_arrow1.gif)
 
@@ -17,6 +18,7 @@ Here is the result of the RAFT  on video2:
 ![optical flow2](https://github.com/hankkkwu/RAFTwithYOLOv4/blob/main/outputs/output_flow2.gif)
 
 Here is the result with bounding box and objects motion on video2:
+(Green arrows are the motion of the objects)
 
 ![result2](https://github.com/hankkkwu/RAFTwithYOLOv4/blob/main/outputs/output_arrow2.gif)
 
