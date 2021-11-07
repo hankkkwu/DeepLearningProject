@@ -246,6 +246,7 @@ plt.show()
 print(flo.shape)
 print(image_arr.shape)
 
+
 #####################################
 # RAFT + YOLOv4 Inference for video #
 #####################################
@@ -253,7 +254,7 @@ video_frames_arrow, video_frames_flow = inference_video("raft_data/kitti_2.mp4")
 
 out = cv2.VideoWriter("outputs/output_flow2.mp4",cv2.VideoWriter_fourcc(*'mp4v'), 15.0, (video_frames_flow[0].shape[1] ,video_frames_flow[0].shape[0]))
 for i in range(len(video_frames_flow)):
-    out.write(video_frames_flow[i].astype(np.uint8))
+    out.write(video_frames_flow[i][:,:,::-1].astype(np.uint8))
 out.release()
 
 out = cv2.VideoWriter("outputs/output_arrow2.mp4",cv2.VideoWriter_fourcc(*'mp4v'), 15.0, (video_frames_arrow[0].shape[1] ,video_frames_arrow[0].shape[0]))
