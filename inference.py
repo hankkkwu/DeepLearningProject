@@ -1,5 +1,4 @@
 # RAFT optical flow algorithm
-
 from raft import RAFT
 from utils import flow_viz
 from utils.utils import InputPadder
@@ -12,6 +11,11 @@ import matplotlib.pyplot as plt
 from yolov4.tf import YOLOv4    # Run a YOLOv4-tiny Object Detection algorithm to identify individual objects
 import tensorflow as tf
 import time
+
+from torchvision.transforms import Compose
+import dpt_package.util.io
+from dpt_package.dpt.models import DPTDepthModel
+from dpt_package.dpt.transforms import Resize, NormalizeImage, PrepareForNet
 
 
 def bgr2rgb(img):
@@ -55,7 +59,7 @@ def load_model(weights_path):
 
 def inference_imgs(model, frame_1, frame_2):
     """
-    Do inference on 2 images
+    Do optical flow inference on 2 images
     :param model: pre-trained weight on KITTI dataset
     :param frame_1: frame at time t
     :param frame_2: frame at time t+1
@@ -122,7 +126,7 @@ def run_obstacle_detection(img):
     return result, pred_bboxes
 
 
-def add_arrow_to_box(result, pred_bboxes, fl_vectors):
+def add_arrow_and_depth(result, pred_bboxes, fl_vectors, depth_map):
     """
     Evaluate the Motion of each obstacle through time,
     draw arrow on each predicted bounding box to present the motion of each object
@@ -133,7 +137,6 @@ def add_arrow_to_box(result, pred_bboxes, fl_vectors):
         image_arr: image with bounding boxes and arrows on it
     """
     h, w, _ = result.shape
-    image_arr = []
 
     #For each box, add an arrow that shows the flow of each obstacle
     for bbox in pred_bboxes:
@@ -150,6 +153,9 @@ def add_arrow_to_box(result, pred_bboxes, fl_vectors):
         bot_right_x = int(center_x + width * 0.5)
         bot_right_y = int(center_y + height * 0.5)
 
+        #############
+        # Add arrow #
+        #############
         arrow_vec_x = fl_vectors[0][0][top_left_y:bot_right_y, top_left_x:bot_right_x]
         arrow_len_x = arrow_vec_x.mean()
         arrow_vec_y = fl_vectors[0][1][top_left_y:bot_right_y, top_left_x:bot_right_x]
@@ -160,8 +166,103 @@ def add_arrow_to_box(result, pred_bboxes, fl_vectors):
         # end point cannot exceed the image width and height
         end_point =(min(int(center_x + arrow_len_x), w), min(int(center_y + arrow_len_y), h))
         # print("end point:", end_point)
-        image_arr = cv2.arrowedLine(result, start_point, end_point, (0,255,0), 5)
-    return image_arr
+        # image_arr = cv2.arrowedLine(result, start_point, end_point, (0,255,0), 5)
+        result = cv2.arrowedLine(result, start_point, end_point, (0,255,0), 5)
+
+        ##################
+        # Add depth info #
+        ##################
+        depth = depth_map[center_y][center_x]     # center of the bounding box
+        result = cv2.putText(result, '{0:.2f} m'.format(depth), (int(center_x - width*0.2), center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
+    return result
+
+
+def depth_prediction(input_image, optimize=True):
+    """Run MonoDepthNN to compute depth maps.
+
+    Args:
+        input_image (BGR image): cv2 captured image
+        model_path (str): path to saved model
+    """
+    # set torch options
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = True
+
+    # select device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # load network
+
+    # Original kitti image size = (1242, 374)
+    # we want it to be (1216, 352) so it can be divided by 32
+    net_w = 1216
+    net_h = 352
+
+    model = DPTDepthModel(
+        path="dpt_package/weights/dpt_hybrid_kitti-cb926ef4.pt",
+        scale=0.00006016,
+        shift=0.00579,
+        invert=True,
+        backbone="vitb_rn50_384",
+        non_negative=True,
+        enable_attention_hooks=False,
+    )
+
+    normalization = NormalizeImage(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+
+    transform = Compose(
+        [
+            Resize(
+                net_w,
+                net_h,
+                resize_target=None,
+                keep_aspect_ratio=True,
+                ensure_multiple_of=32,
+                resize_method="minimal",
+                image_interpolation_method=cv2.INTER_CUBIC,
+            ),
+            normalization,
+            PrepareForNet(),
+        ]
+    )
+
+    # print(model)
+    model.eval()
+
+    if optimize == True and device == torch.device("cuda"):
+        # for better performance
+        model = model.to(memory_format=torch.channels_last)
+        model = model.half()    # make it torch.float16
+
+    model.to(device)
+
+    # input
+    # this will convert the image to RGB, and do normalization by /255
+    img = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB) / 255.0
+    img_input = transform({"image": img})["image"]
+
+    # compute
+    with torch.no_grad():
+        sample = torch.from_numpy(img_input).to(device).unsqueeze(0)
+
+        if optimize == True and device == torch.device("cuda"):
+            sample = sample.to(memory_format=torch.channels_last)
+            sample = sample.half()
+
+        prediction = model.forward(sample)
+        prediction = (
+            torch.nn.functional.interpolate(
+                prediction.unsqueeze(1),
+                size=img.shape[:2],
+                mode="bicubic",
+                align_corners=False,
+            )
+            .squeeze()
+            .cpu()
+            .numpy()
+        )
+    # util.io.write_depth(filename, prediction, bits=2, absolute_depth=args.absolute_depth)
+    return prediction
 
 
 def inference_video(video_path):
@@ -180,24 +281,47 @@ def inference_video(video_path):
     ret, prev_frame = cap.read()
     video_frames_arrow = []
     video_frames_flow = []
+    video_frames_depth = []
 
-    with torch.no_grad():
-        while True:
-            # read the next frame
-            ret, cur_frame = cap.read()
-            if not ret:
-                break
-            # Predict the Flow
-            flow_up, flo = inference_imgs(model, prev_frame.copy(), cur_frame.copy())
-            # Run obstacle Detection
-            result, pred_bboxes = run_obstacle_detection(bgr2rgb(cur_frame))
-            # Add Motion Prediction
-            image_arr = bgr2rgb(add_arrow_to_box(result, pred_bboxes, flow_up))
-            video_frames_arrow.append(image_arr)
-            video_frames_flow.append(flo)
-            # mode forward one frame
-            prev_frame = cur_frame
-    return video_frames_arrow, video_frames_flow
+    # Original kitti image size = (1242, 374)
+    # we want it to be (1216, 352) so it can be divided by 32
+    height, width, _ = prev_frame.shape
+    top = height - 352
+    left = (width - 1216) // 2
+    prev_frame = prev_frame[top : top + 352, left : left + 1216, :]
+
+    # with torch.no_grad():
+    while True:
+        # read the next frame
+        ret, cur_frame = cap.read()
+        if not ret:
+            break
+        # Original kitti image size = (1242, 374)
+        # we want it to be (1216, 352) so it can be divided by 32
+        height, width, _ = cur_frame.shape
+        top = height - 352
+        left = (width - 1216) // 2
+        cur_frame = cur_frame[top : top + 352, left : left + 1216, :]
+
+        # Predict the optical flow map
+        flow_up, flo = inference_imgs(model, prev_frame.copy(), cur_frame.copy())
+        # Run obstacle Detection
+        result, pred_bboxes = run_obstacle_detection(bgr2rgb(cur_frame.copy()))
+        # Run depth prediction
+        depth_map = depth_prediction(cur_frame.copy())
+
+        # Add motion prediction and depth prediction
+        image_result = bgr2rgb(add_arrow_and_depth(result, pred_bboxes, flow_up, depth_map))
+
+        # add depth map to a list
+        depth_map *= 256
+        video_frames_depth.append(depth_map)
+
+        video_frames_arrow.append(image_result)
+        video_frames_flow.append(flo)
+        # mode forward one frame
+        prev_frame = cur_frame
+    return video_frames_arrow, video_frames_flow, video_frames_depth
 
 
 # Load Yolov4 object detection model
@@ -206,7 +330,7 @@ yolo.classes = "raft_data/coco.names"
 yolo.make_model()
 yolo.load_weights("raft_data/yolov4-tiny.weights", weights_type="yolo")
 
-
+"""
 ##############################################
 # RAFT Inference for 2 images (at t and t+1) #
 ##############################################
@@ -245,19 +369,19 @@ plt.show()
 
 print(flo.shape)
 print(image_arr.shape)
-
+"""
 
 #####################################
 # RAFT + YOLOv4 Inference for video #
 #####################################
-video_frames_arrow, video_frames_flow = inference_video("raft_data/kitti_2.mp4")
+video_frames_arrow, video_frames_flow, video_frames_depth = inference_video("raft_data/kitti_1.mp4")
 
-out = cv2.VideoWriter("outputs/output_flow2.mp4",cv2.VideoWriter_fourcc(*'mp4v'), 15.0, (video_frames_flow[0].shape[1] ,video_frames_flow[0].shape[0]))
-for i in range(len(video_frames_flow)):
-    out.write(video_frames_flow[i][:,:,::-1].astype(np.uint8))
-out.release()
+# out = cv2.VideoWriter("outputs/output_flow3.mp4",cv2.VideoWriter_fourcc(*'mp4v'), 15.0, (video_frames_flow[0].shape[1] ,video_frames_flow[0].shape[0]))
+# for i in range(len(video_frames_flow)):
+#     out.write(video_frames_flow[i][:,:,::-1].astype(np.uint8))
+# out.release()
 
-out = cv2.VideoWriter("outputs/output_arrow2.mp4",cv2.VideoWriter_fourcc(*'mp4v'), 15.0, (video_frames_arrow[0].shape[1] ,video_frames_arrow[0].shape[0]))
+out = cv2.VideoWriter("outputs/output1.mp4",cv2.VideoWriter_fourcc(*'mp4v'), 15.0, (video_frames_arrow[0].shape[1] ,video_frames_arrow[0].shape[0]))
 for i in range(len(video_frames_arrow)):
     out.write(video_frames_arrow[i].astype(np.uint8))
 out.release()
