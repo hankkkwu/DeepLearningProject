@@ -23,5 +23,12 @@ Here is the result with object's depth and motion on video2:
 
 ![result2](https://github.com/hankkkwu/RAFTwithYOLOv4/blob/main/outputs/output2.gif)
 
+The DPT architecture:
+
+![DPT architecture](https://github.com/hankkkwu/RAFTwithYOLOv4/blob/main/DPT.png)
+
+Reference papers:
+
 [Link to the RAFT paper](https://arxiv.org/abs/2003.12039)
+
 [Link to the DPT paper](https://arxiv.org/abs/2103.13413)
